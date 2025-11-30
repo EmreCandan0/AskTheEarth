@@ -1,0 +1,30 @@
+# === CDSE DOWNLOADER CONFIGURATION ===
+
+# CDSE Kullanıcı Bilgileri
+CDSE_USERNAME:
+CDSE_PASSWORD:
+# Dosya Yolları
+OUTPUT_PATH:
+EXTRACT_PATH:
+GEOJSON_PATH:
+
+# Sentinel Ayarları
+COLLECTION_NAME: "SENTINEL-2"
+PRODUCT_TYPE: "S2MSI2A"
+
+# Grid Kodları (Sentinel-2 için)
+GRID_CODE:
+  - "34TFL"
+  - "34TFK"
+
+# Maksimum Bulut Örtüsü (%)
+CLOUDCOVER_MAX: 20
+
+# Tarih Ayarları
+DATE_AUTO: true
+DATE_AUTO_RANGE: 20
+START_DATE: "2025-07-28"
+END_DATE: "2025-07-30"
+
+# API Ayarları
+MAX_PRODUCTS: 10

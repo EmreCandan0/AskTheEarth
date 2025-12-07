@@ -374,17 +374,12 @@ def download_sentinel_product(geojson_name, start_date, end_date, date_auto, clo
                 "product": product["Name"],
             }
 
-        extract_result = extract_zip(download_result["filename"])
+        extract_zip(download_result["filename"])
 
         return {
             "success": True,
             "message": "Download completed successfully",
-            "product": {
-                "name": product["Name"],
-                "id": product["Id"],
-                "downloaded_file": download_result["filename"],
-                "extracted_folder": extract_result["folder"],
-            },
+            "product": product["Name"],
         }
 
     except Exception as e:
@@ -396,6 +391,32 @@ def download_sentinel_product(geojson_name, start_date, end_date, date_auto, clo
         }
 
 
+def find_sentinel_band_folder(safe_folder: str, resolution: str = "R10m") -> str:
+    """
+    SAFE klasörü içinden GRANULE → IMG_DATA → resolution (R10m/R20m/R60m) klasörünü döner.
+    """
+
+    granule_path = os.path.join("extracted",safe_folder, "GRANULE")
+    if not os.path.exists(granule_path):
+        raise FileNotFoundError("GRANULE klasörü bulunamadı")
+
+    granule_dirs = [os.path.join(granule_path, d) for d in os.listdir(granule_path)]
+    granule_dirs = [d for d in granule_dirs if os.path.isdir(d)]
+
+    if not granule_dirs:
+        raise FileNotFoundError("GRANULE içinde alt klasör bulunamadı")
+
+    granule_dir = granule_dirs[0]
+
+    img_data_path = os.path.join(granule_dir, "IMG_DATA")
+    if not os.path.exists(img_data_path):
+        raise FileNotFoundError("IMG_DATA klasörü bulunamadı")
+
+    resolution_path = os.path.join(img_data_path, resolution)
+    if not os.path.exists(resolution_path):
+        raise FileNotFoundError(f"{resolution} klasörü bulunamadı")
+
+    return resolution_path
 
 class DownloadRequest(BaseModel):
     geojson_name: str

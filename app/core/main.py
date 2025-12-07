@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException
-from app.service.downloader import DownloadRequest, download_sentinel_product
+from fastapi import FastAPI
+from app.service.downloader import DownloadRequest, download_sentinel_product,find_sentinel_band_folder
+from app.service.calculate_ndvi import generate_ndvi_tif,calculate_ndvi_and_stats
 import uvicorn
 
 
@@ -9,10 +10,11 @@ app = FastAPI(
     description="Sentinel-2 indirme servisi (FastAPI uyarlaması)"
 )
 
+GLOBAL_BAND_FOLDER: str
 
 @app.post("/download/sentinel2")
 def api_download(req: DownloadRequest):
-
+    global GLOBAL_BAND_FOLDER
     result = download_sentinel_product(
         geojson_name=req.geojson_name,
         start_date=req.start_date,
@@ -21,10 +23,26 @@ def api_download(req: DownloadRequest):
         cloudcover_max=req.cloudcover_max
     )
 
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result)
+    if result.get("product"):
+        extracted_folder=result.get("product")
+        GLOBAL_BAND_FOLDER = find_sentinel_band_folder(extracted_folder)
+    else:
+        raise FileNotFoundError("Cant find the extracted folder")
+    return {
+        "band_folder":GLOBAL_BAND_FOLDER
+    }
 
-    return result
+
+@app.post("/ndvi")
+def full_ndvi_process(lat: float = None, lon: float = None):
+    global GLOBAL_BAND_FOLDER
+    ndvi_path = generate_ndvi_tif(GLOBAL_BAND_FOLDER)
+    stats = calculate_ndvi_and_stats(ndvi_path, lat, lon)
+
+    return {
+        "mean_ndvi": stats["mean_ndvi"],
+        "point_ndvi": stats["point_ndvi"]
+    }
 
 
 if __name__ == "__main__":

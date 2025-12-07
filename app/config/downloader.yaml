@@ -4,9 +4,8 @@
 CDSE_USERNAME:
 CDSE_PASSWORD:
 # Dosya Yolları
-OUTPUT_PATH:
-EXTRACT_PATH:
-GEOJSON_PATH:
+OUTPUT_PATH: "./downloads"
+EXTRACT_PATH: "./extracted"
 
 # Sentinel Ayarları
 COLLECTION_NAME: "SENTINEL-2"

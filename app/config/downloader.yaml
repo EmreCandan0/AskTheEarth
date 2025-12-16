@@ -1,8 +1,9 @@
 # === CDSE DOWNLOADER CONFIGURATION ===
 
 # CDSE Kullanıcı Bilgileri
-CDSE_USERNAME:
-CDSE_PASSWORD:
+CDSE_USERNAME: "javodix397@kimdyn.com"
+CDSE_PASSWORD: "Asddsa.12345"
+
 # Dosya Yolları
 OUTPUT_PATH: "./downloads"
 EXTRACT_PATH: "./extracted"
@@ -13,8 +14,6 @@ PRODUCT_TYPE: "S2MSI2A"
 
 # Grid Kodları (Sentinel-2 için)
 GRID_CODE:
-  - "34TFL"
-  - "34TFK"
 
 # Maksimum Bulut Örtüsü (%)
 CLOUDCOVER_MAX: 20

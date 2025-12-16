@@ -136,7 +136,6 @@ def search_products(
     max_results: int = 10
 ) -> list:
     """Ürün arar ve sonuçları döner"""
-
     url = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -324,7 +323,7 @@ def calculate_dates(date_auto:bool,start_date,end_date) -> tuple:
 
 def download_sentinel_product(geojson_name, start_date, end_date, date_auto, cloudcover_max):
 
-    geojson_path = f"./downloads/{geojson_name}"
+    geojson_path = f"./geojson/{geojson_name}"
     try:
         print("[CDSE] Getting access token...")
         token = get_access_token()
@@ -398,6 +397,7 @@ def find_sentinel_band_folder(safe_folder: str, resolution: str = "R10m") -> str
 
     granule_path = os.path.join("extracted",safe_folder, "GRANULE")
     if not os.path.exists(granule_path):
+
         raise FileNotFoundError("GRANULE klasörü bulunamadı")
 
     granule_dirs = [os.path.join(granule_path, d) for d in os.listdir(granule_path)]

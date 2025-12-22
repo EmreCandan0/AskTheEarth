@@ -32,7 +32,7 @@ DATE_AUTO_RANGE = config["DATE_AUTO_RANGE"]
 MAX_PRODUCTS = config.get("MAX_PRODUCTS", 10)
 
 
-print(f"[CONFIG] ✓ Configuration loaded from: {config_path}")
+print(f"[CONFIG] [OK] Configuration loaded from: {config_path}")
 print(f"[CONFIG] Collection: {COLLECTION_NAME}, Product Type: {PRODUCT_TYPE}")
 print(f"[CONFIG] Output: {OUTPUT_PATH}, Extract: {EXTRACT_PATH}")
 
@@ -136,7 +136,6 @@ def search_products(
     max_results: int = 10
 ) -> list:
     """Ürün arar ve sonuçları döner"""
-
     url = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -212,7 +211,7 @@ def download_product(
                         print(f"\r[DOWNLOAD] Progress: {percent:.1f}%", end="", flush=True)
 
             print()  # Yeni satır
-            print(f"[DOWNLOAD] ✓ Completed: {os.path.basename(filename)}")
+            print(f"[DOWNLOAD] [OK] Completed: {os.path.basename(filename)}")
 
             return {
                 "success": True,
@@ -268,7 +267,7 @@ def extract_zip(zip_path: str) -> dict:
                 if not top_folder.startswith(f"{prefix}_"):
                     if os.path.exists(src_path) and not os.path.exists(dst_path):
                         os.rename(src_path, dst_path)
-                        print(f"[EXTRACT] ✓ Extracted and renamed to: {prefix}_{top_folder}")
+                        print(f"[EXTRACT] [OK] Extracted and renamed to: {prefix}_{top_folder}")
                         return {
                             "success": True,
                             "message": "Extracted and renamed",
@@ -282,7 +281,7 @@ def extract_zip(zip_path: str) -> dict:
                             "folder": dst_path
                         }
                 else:
-                    print(f"[EXTRACT] ✓ Extracted: {top_folder}")
+                    print(f"[EXTRACT] [OK] Extracted: {top_folder}")
                     return {
                         "success": True,
                         "message": "Extracted",
@@ -324,11 +323,11 @@ def calculate_dates(date_auto:bool,start_date,end_date) -> tuple:
 
 def download_sentinel_product(geojson_name, start_date, end_date, date_auto, cloudcover_max):
 
-    geojson_path = f"./downloads/{geojson_name}"
+    geojson_path = f"./geojson/{geojson_name}"
     try:
         print("[CDSE] Getting access token...")
         token = get_access_token()
-        print("[CDSE] ✓ Access token received")
+        print("[CDSE] [OK] Access token received")
 
         # Tarih hesapla
         start_date, end_date = calculate_dates(date_auto, start_date, end_date)
@@ -339,7 +338,7 @@ def download_sentinel_product(geojson_name, start_date, end_date, date_auto, clo
         wkt_polygon = None
         if geojson_path and os.path.exists(geojson_path):
             wkt_polygon = geojson_to_wkt(geojson_path)
-            print(f"[CDSE] ✓ GeoJSON loaded: {geojson_path}")
+            print(f"[CDSE] [OK] GeoJSON loaded: {geojson_path}")
 
         print(f"[CDSE] Searching for products...")
 
@@ -398,6 +397,7 @@ def find_sentinel_band_folder(safe_folder: str, resolution: str = "R10m") -> str
 
     granule_path = os.path.join("extracted",safe_folder, "GRANULE")
     if not os.path.exists(granule_path):
+
         raise FileNotFoundError("GRANULE klasörü bulunamadı")
 
     granule_dirs = [os.path.join(granule_path, d) for d in os.listdir(granule_path)]

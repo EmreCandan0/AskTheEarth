@@ -321,6 +321,16 @@ def calculate_dates(date_auto:bool,start_date,end_date) -> tuple:
 
     return start_str, end_str
 
+def extract_tile_id(product_name: str) -> str:
+    """Urun adindaki tile ID'sini cikarir (ornegin T36TWK)"""
+    # S2A_MSIL2A_20251203T084501_N0511_R064_T36TWK_20251203T105510
+    parts = product_name.split("_")
+    for part in parts:
+        if part.startswith("T") and len(part) == 6:
+            return part
+    return None
+
+
 def download_sentinel_product(geojson_name, start_date, end_date, date_auto, cloudcover_max):
 
     geojson_path = f"./geojson/{geojson_name}"
@@ -355,30 +365,58 @@ def download_sentinel_product(geojson_name, start_date, end_date, date_auto, clo
             print("[CDSE] No products found")
             raise HTTPError("No products found")
 
-        product = products[0]
+        # Tile ID'ye gore grupla - her tile icin en iyi urunu sec
+        tiles = {}
+        for product in products:
+            tile_id = extract_tile_id(product["Name"])
+            if tile_id and tile_id not in tiles:
+                tiles[tile_id] = product
+                print(f"[CDSE] Found tile: {tile_id} -> {product['Name']}")
 
-        print(f"[CDSE] Selected: {product['Name']}")
+        print(f"[CDSE] Total unique tiles found: {len(tiles)}")
 
-        download_result = download_product(
-            token,
-            product["Id"],
-            product["Name"],
-            OUTPUT_PATH
-        )
+        downloaded_products = []
+        failed_products = []
 
-        if not download_result["success"]:
+        for tile_id, product in tiles.items():
+            print(f"[CDSE] Downloading tile {tile_id}: {product['Name']}")
+
+            download_result = download_product(
+                token,
+                product["Id"],
+                product["Name"],
+                OUTPUT_PATH
+            )
+
+            if download_result["success"]:
+                extract_result = extract_zip(download_result["filename"])
+                downloaded_products.append(product["Name"])
+                print(f"[CDSE] [OK] Tile {tile_id} completed")
+            else:
+                # Dosya zaten varsa basarili say
+                if "already exists" in download_result.get("message", ""):
+                    downloaded_products.append(product["Name"])
+                    print(f"[CDSE] Tile {tile_id} already exists")
+                else:
+                    failed_products.append(product["Name"])
+                    print(f"[CDSE] [FAIL] Tile {tile_id}: {download_result['message']}")
+
+        if not downloaded_products:
             return {
                 "success": False,
-                "message": download_result["message"],
-                "product": product["Name"],
+                "message": "No products could be downloaded",
+                "product": None,
+                "products": [],
+                "tiles": list(tiles.keys())
             }
-
-        extract_zip(download_result["filename"])
 
         return {
             "success": True,
-            "message": "Download completed successfully",
-            "product": product["Name"],
+            "message": f"Downloaded {len(downloaded_products)} tile(s)",
+            "product": downloaded_products[0],  # Ilk urun (geriye uyumluluk)
+            "products": downloaded_products,
+            "tiles": list(tiles.keys()),
+            "failed": failed_products
         }
 
     except Exception as e:
@@ -386,7 +424,9 @@ def download_sentinel_product(geojson_name, start_date, end_date, date_auto, clo
         return {
             "success": False,
             "message": str(e),
-            "product": None
+            "product": None,
+            "products": [],
+            "tiles": []
         }
 
 

@@ -188,7 +188,7 @@ async function saveGeneratedGeoJSON(geojson) {
 // ============================================
 // Draw Event Handlers
 // ============================================
-map.on(L.Draw.Event.CREATED, async (e) => {
+map.on('draw:created', async (e) => {
     const layer = e.layer;
     
     // Clear previous drawings
@@ -249,11 +249,11 @@ map.on(L.Draw.Event.CREATED, async (e) => {
     state.isDrawing = false;
 });
 
-map.on(L.Draw.Event.DRAWSTART, () => {
+map.on('draw:drawstart', () => {
     state.isDrawing = true;
 });
 
-map.on(L.Draw.Event.DRAWSTOP, () => {
+map.on('draw:drawstop', () => {
     state.isDrawing = false;
 });
 
@@ -528,7 +528,7 @@ async function handleDownload() {
         return;
     }
     
-    showLoading('Sentinel-2 verisi indiriliyor...');
+    showLoading('Sentinel-2 verisi indiriliyor... (Birden fazla tile inebilir)');
     setStatus('Indiriliyor...');
     
     const dateAuto = document.getElementById('date-auto');
@@ -558,8 +558,13 @@ async function handleDownload() {
         
         if (response.ok) {
             state.bandFolder = data.band_folder;
-            showToast(`Indirme tamamlandi: ${data.product}`, 'success');
-            setStatus('Indirme tamamlandi');
+            state.bandFolders = data.band_folders || [data.band_folder];
+            
+            const tileCount = data.tiles ? data.tiles.length : 1;
+            const tileNames = data.tiles ? data.tiles.join(', ') : '';
+            
+            showToast(`${tileCount} tile indirildi: ${tileNames}`, 'success');
+            setStatus(`${tileCount} tile hazir`);
         } else {
             showToast(data.detail || 'Indirme hatasi', 'error');
             setStatus('Hata');

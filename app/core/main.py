@@ -31,23 +31,30 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-# Session state yönetimi için basit in-memory store
-# Production'da Redis veya database kullanılmalı
+# Session state yonetimi icin basit in-memory store
+# Production'da Redis veya database kullanilmali
 class SessionState:
     def __init__(self):
-        self._band_folders: dict[str, str] = {}
+        self._band_folders: list[str] = []
 
-    def set_band_folder(self, session_id: str, folder: str):
-        self._band_folders[session_id] = folder
+    def add_band_folder(self, folder: str):
+        if folder not in self._band_folders:
+            self._band_folders.append(folder)
 
-    def get_band_folder(self, session_id: str) -> Optional[str]:
-        return self._band_folders.get(session_id)
+    def set_band_folders(self, folders: list[str]):
+        self._band_folders = folders
+
+    def get_band_folders(self) -> list[str]:
+        return self._band_folders
 
     def get_latest_band_folder(self) -> Optional[str]:
-        """Son eklenen band folder'ı döner (basit kullanım için)"""
+        """Son eklenen band folder'i doner (basit kullanim icin)"""
         if self._band_folders:
-            return list(self._band_folders.values())[-1]
+            return self._band_folders[-1]
         return None
+
+    def clear(self):
+        self._band_folders = []
 
 
 state = SessionState()
@@ -58,7 +65,10 @@ class DownloadResponse(BaseModel):
     success: bool
     message: str
     product: Optional[str] = None
+    products: Optional[list[str]] = None
     band_folder: Optional[str] = None
+    band_folders: Optional[list[str]] = None
+    tiles: Optional[list[str]] = None
 
 
 class NDVIRequest(BaseModel):
@@ -140,13 +150,14 @@ async def upload_geojson(file: UploadFile = File(...)):
 @app.post("/download/sentinel2", response_model=DownloadResponse)
 def api_download(req: DownloadRequest):
     """
-    Sentinel-2 ürünü indirir ve extract eder.
+    Sentinel-2 urunu indirir ve extract eder.
+    Secilen alan birden fazla tile'a denk gelirse hepsini indirir.
 
-    - **geojson_name**: GeoJSON dosya adı (geojson/ klasöründe olmalı)
-    - **start_date**: Başlangıç tarihi (YYYY-MM-DD)
-    - **end_date**: Bitiş tarihi (YYYY-MM-DD)
-    - **date_auto**: True ise otomatik tarih aralığı kullanılır
-    - **cloudcover_max**: Maksimum bulut örtüsü yüzdesi
+    - **geojson_name**: GeoJSON dosya adi (geojson/ klasorunde olmali)
+    - **start_date**: Baslangic tarihi (YYYY-MM-DD)
+    - **end_date**: Bitis tarihi (YYYY-MM-DD)
+    - **date_auto**: True ise otomatik tarih araligi kullanilir
+    - **cloudcover_max**: Maksimum bulut ortusu yuzdesi
     """
     result = download_sentinel_product(
         geojson_name=req.geojson_name,
@@ -162,71 +173,117 @@ def api_download(req: DownloadRequest):
             detail=result.get("message", "Download failed")
         )
 
-    product_name = result.get("product")
-    band_folder = None
+    # Onceki band folder'lari temizle
+    state.clear()
 
-    if product_name:
+    products = result.get("products", [])
+    band_folders = []
+
+    for product_name in products:
         try:
             band_folder = find_sentinel_band_folder(product_name)
-
-            # State'e kaydet
-            state.set_band_folder(product_name, band_folder)
+            band_folders.append(band_folder)
+            state.add_band_folder(band_folder)
+            print(f"[API] Band folder added: {band_folder}")
         except FileNotFoundError as e:
-            # Extract başarılı ama band folder bulunamadı
-            raise HTTPException(
-                status_code=500,
-                detail=f"Product downloaded but band folder not found: {str(e)}"
-            )
+            print(f"[API] Band folder not found for {product_name}: {e}")
+
+    if not band_folders:
+        raise HTTPException(
+            status_code=500,
+            detail="Products downloaded but no band folders found"
+        )
 
     return DownloadResponse(
         success=True,
-        message="Download completed successfully",
-        product=product_name,
-        band_folder=band_folder
+        message=f"{len(band_folders)} tile indirildi",
+        product=products[0] if products else None,
+        products=products,
+        band_folder=band_folders[0] if band_folders else None,
+        band_folders=band_folders,
+        tiles=result.get("tiles", [])
     )
 
 
 @app.post("/ndvi", response_model=NDVIResponse)
 def get_ndvi(req: NDVIRequest):
     """
-    Belirtilen koordinat için NDVI değerini hesaplar.
+    Belirtilen koordinat icin NDVI degerini hesaplar.
+    Birden fazla tile varsa, noktayi iceren tile'i otomatik bulur.
 
     - **lat**: Enlem (EPSG:4326)
     - **lon**: Boylam (EPSG:4326)
-    - **band_folder**: Band klasörü yolu (opsiyonel, belirtilmezse son indirilen kullanılır)
+    - **band_folder**: Band klasoru yolu (opsiyonel, belirtilmezse tum indirilenler denenir)
     """
     # Band folder belirle
-    band_folder = req.band_folder or state.get_latest_band_folder()
+    if req.band_folder:
+        band_folders = [req.band_folder]
+    else:
+        band_folders = state.get_band_folders()
 
-    if not band_folder:
+    if not band_folders:
         raise HTTPException(
             status_code=400,
             detail="Band folder not specified and no previous download found. "
                    "Please download a Sentinel-2 product first or specify band_folder."
         )
 
-    try:
-        result = calculate_ndvi(band_folder, req.lat, req.lon)
-        return NDVIResponse(
-            success=True,
-            mean_ndvi=result.get("mean_ndvi"),
-            point_ndvi=result.get("point_ndvi")
-        )
-    except FileNotFoundError as e:
+    # Tum band folder'lari dene, noktayi icereni bul
+    last_error = None
+    nodata_count = 0
+    outside_count = 0
+    
+    for band_folder in band_folders:
+        try:
+            print(f"[NDVI] Trying band folder: {band_folder}")
+            result = calculate_ndvi(band_folder, req.lat, req.lon)
+
+            # Sinir disi mi kontrol et
+            if result.get("outside_bounds"):
+                outside_count += 1
+                print(f"[NDVI] Outside bounds in: {band_folder}")
+                continue
+
+            # NoData alani mi kontrol et
+            if result.get("is_nodata"):
+                nodata_count += 1
+                print(f"[NDVI] NoData area in: {band_folder}")
+                continue
+
+            # point_ndvi None degilse ve gecerli bir deger ise bu tile'i kullan
+            if result.get("point_ndvi") is not None:
+                print(f"[NDVI] Found valid NDVI in: {band_folder}")
+                return NDVIResponse(
+                    success=True,
+                    mean_ndvi=result.get("mean_ndvi"),
+                    point_ndvi=result.get("point_ndvi"),
+                    message=f"Tile: {band_folder.split('/')[-1] if '/' in band_folder else band_folder}"
+                )
+        except Exception as e:
+            print(f"[NDVI] Error in {band_folder}: {e}")
+            last_error = e
+            continue
+
+    # NoData alanina denk geldi
+    if nodata_count > 0 and outside_count == 0:
         raise HTTPException(
             status_code=404,
-            detail=f"Required band files not found: {str(e)}"
+            detail=f"Koordinat ({req.lat}, {req.lon}) siyah/NoData alaninda. "
+                   f"Bu bolge uydu goruntusu disinda. Farkli bir nokta secin."
         )
-    except RuntimeError as e:
+
+    # Hicbir tile'da bulunamadi
+    if last_error:
         raise HTTPException(
-            status_code=500,
-            detail=f"NDVI calculation failed: {str(e)}"
+            status_code=404,
+            detail=f"Koordinat ({req.lat}, {req.lon}) hicbir indirilen tile icinde degil. "
+                   f"Farkli bir alan secin veya daha fazla tile indirin."
         )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unexpected error during NDVI calculation: {str(e)}"
-        )
+
+    raise HTTPException(
+        status_code=500,
+        detail="NDVI hesaplanamadi"
+    )
 
 
 @app.get("/health")
@@ -237,9 +294,10 @@ def health_check():
 
 @app.get("/state/band-folders")
 def get_band_folders():
-    """Mevcut band folder'ları listeler"""
+    """Mevcut band folder'lari listeler"""
     return {
-        "band_folders": state._band_folders,
+        "band_folders": state.get_band_folders(),
+        "count": len(state.get_band_folders()),
         "latest": state.get_latest_band_folder()
     }
 

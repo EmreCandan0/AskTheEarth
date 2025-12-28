@@ -1,24 +1,28 @@
 <!DOCTYPE html>
 <html lang="tr">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AskTheEarth - NDVI Analyzer</title>
-    
+
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
+
     <!-- Leaflet Draw CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
-    
+
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=2">
 </head>
+
 <body>
     <div class="app-container">
         <!-- Sidebar -->
@@ -26,9 +30,9 @@
             <div class="logo">
                 <div class="logo-icon">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"/>
-                        <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
-                        <path d="M2 12h20"/>
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+                        <path d="M2 12h20" />
                     </svg>
                 </div>
                 <h1>AskTheEarth</h1>
@@ -42,24 +46,28 @@
                 </div>
                 <div class="panel-content">
                     <p class="hint">Haritada dikdortgen cizerek analiz alanini belirleyin</p>
-                    
+
                     <div class="draw-controls" style="display: flex; gap: 10px; margin-bottom: 16px;">
-                        <button id="btn-start-draw" type="button" onclick="startDrawing()" style="flex: 1; background: linear-gradient(135deg, #22c55e, #10b981); color: #0a0f0d; font-weight: 600; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-family: Outfit, sans-serif; font-size: 0.9375rem;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-                                <rect x="3" y="3" width="18" height="18" rx="2"/>
-                                <path d="M3 9h18M9 21V9"/>
+                        <button id="btn-start-draw" type="button"
+                            style="flex: 1; background: linear-gradient(135deg, #22c55e, #10b981); color: #0a0f0d; font-weight: 600; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-family: Outfit, sans-serif; font-size: 0.9375rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18"
+                                height="18">
+                                <rect x="3" y="3" width="18" height="18" rx="2" />
+                                <path d="M3 9h18M9 21V9" />
                             </svg>
                             Dikdortgen Ciz
                         </button>
-                        <button id="btn-clear-draw" type="button" onclick="clearDrawing()" style="display: none; background: transparent; border: 1px solid #1e2b26; color: #8fa89d; padding: 12px 20px; border-radius: 6px; cursor: pointer; align-items: center; justify-content: center; gap: 8px; font-family: Outfit, sans-serif; font-size: 0.9375rem;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-                                <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
-                                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                        <button id="btn-clear-draw" type="button"
+                            style="display: none; background: transparent; border: 1px solid #1e2b26; color: #8fa89d; padding: 12px 20px; border-radius: 6px; cursor: pointer; align-items: center; justify-content: center; gap: 8px; font-family: Outfit, sans-serif; font-size: 0.9375rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18"
+                                height="18">
+                                <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                             </svg>
                             Temizle
                         </button>
                     </div>
-                    
+
                     <!-- Drawn Area Info -->
                     <div class="drawn-area-info" id="drawn-area-info" style="display: none;">
                         <div class="area-coords">
@@ -75,10 +83,13 @@
                     </div>
 
                     <!-- Collapsible Upload Section -->
-                    <div class="upload-section-toggle" id="upload-toggle" style="border-top: 1px solid #1e2b26; padding-top: 16px; margin-top: 8px;">
-                        <button id="btn-toggle-upload" type="button" onclick="toggleUploadSection()" style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 14px; background: transparent; border: 1px dashed #1e2b26; border-radius: 6px; color: #5a7268; font-family: Outfit, sans-serif; font-size: 0.8125rem; cursor: pointer;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" class="toggle-icon" style="transition: transform 150ms ease;">
-                                <polyline points="6 9 12 15 18 9"/>
+                    <div class="upload-section-toggle" id="upload-toggle"
+                        style="border-top: 1px solid #1e2b26; padding-top: 16px; margin-top: 8px;">
+                        <button id="btn-toggle-upload" type="button"
+                            style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 14px; background: transparent; border: 1px dashed #1e2b26; border-radius: 6px; color: #5a7268; font-family: Outfit, sans-serif; font-size: 0.8125rem; cursor: pointer;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16"
+                                height="16" class="toggle-icon" style="transition: transform 150ms ease;">
+                                <polyline points="6 9 12 15 18 9" />
                             </svg>
                             <span>veya GeoJSON dosyasi yukle</span>
                         </button>
@@ -89,32 +100,32 @@
                             <input type="file" id="geojson-input" accept=".geojson,.json" hidden>
                             <div class="upload-icon-mini">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                    <polyline points="17 8 12 3 7 8"/>
-                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                    <polyline points="17 8 12 3 7 8" />
+                                    <line x1="12" y1="3" x2="12" y2="15" />
                                 </svg>
                             </div>
                             <p>Sürükle veya <span>seç</span></p>
                         </div>
-                        
+
                         <div class="existing-files-mini">
                             <select id="existing-geojson">
                                 <option value="">Mevcut dosyalardan seç...</option>
                             </select>
                         </div>
-                        
+
                         <div class="file-info" id="file-info" style="display: none;">
                             <div class="file-name">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                                    <polyline points="14 2 14 8 20 8"/>
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                                    <polyline points="14 2 14 8 20 8" />
                                 </svg>
                                 <span id="selected-file-name">-</span>
                             </div>
                             <button class="btn-icon" id="clear-file" title="Temizle">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="18" y1="6" x2="6" y2="18"/>
-                                    <line x1="6" y1="6" x2="18" y2="18"/>
+                                    <line x1="18" y1="6" x2="6" y2="18" />
+                                    <line x1="6" y1="6" x2="18" y2="18" />
                                 </svg>
                             </button>
                         </div>
@@ -135,7 +146,7 @@
                             Otomatik tarih aralığı
                         </label>
                     </div>
-                    
+
                     <div class="form-row" id="date-inputs" style="display: none;">
                         <div class="form-group">
                             <label for="start-date">Başlangıç</label>
@@ -146,51 +157,50 @@
                             <input type="date" id="end-date">
                         </div>
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="cloudcover">Maks. Bulut Örtüsü: <span id="cloudcover-value">20</span>%</label>
                         <input type="range" id="cloudcover" min="0" max="100" value="20">
                     </div>
-                    
+
                     <button class="btn btn-primary" id="btn-download">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="7 10 12 15 17 10"/>
-                            <line x1="12" y1="15" x2="12" y2="3"/>
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
                         </svg>
                         Sentinel-2 İndir
                     </button>
                 </div>
             </div>
 
-            <!-- Step 3: NDVI -->
-            <div class="panel" id="panel-ndvi">
+            <!-- Step 3: Index Layers Panel -->
+            <div class="panel" id="panel-raster">
                 <div class="panel-header">
                     <span class="step-badge">3</span>
-                    <h2>NDVI Hesapla</h2>
+                    <h2>İndeks Katmanları</h2>
                 </div>
                 <div class="panel-content">
-                    <p class="hint">Harita uzerinde bir noktaya tiklayin veya koordinat girin</p>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="lat">Enlem (Lat)</label>
-                            <input type="number" id="lat" step="0.0001" placeholder="40.5">
+                    <p class="hint" id="raster-hint">Oluşturulan indeks katmanlarını buradan yönetin</p>
+
+                    <!-- Active Layers List -->
+                    <div class="active-layers" id="active-layers-container" style="display: none;">
+                        <div class="layers-list" id="layers-list">
+                            <!-- Dynamic layers will be added here -->
                         </div>
-                        <div class="form-group">
-                            <label for="lon">Boylam (Lon)</label>
-                            <input type="number" id="lon" step="0.0001" placeholder="29.5">
+
+                        <!-- Global Opacity Control -->
+                        <div class="opacity-control" style="margin-top: 12px;">
+                            <label>Genel Opaklık: <span id="opacity-value">80</span>%</label>
+                            <input type="range" id="layer-opacity" min="0" max="100" value="80">
                         </div>
                     </div>
-                    
-                    <button class="btn btn-success" id="btn-ndvi">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M12 20V10"/>
-                            <path d="M18 20V4"/>
-                            <path d="M6 20v-4"/>
-                        </svg>
-                        NDVI Hesapla
-                    </button>
+
+                    <!-- Empty state -->
+                    <div class="empty-layers" id="empty-layers">
+                        <p class="hint">Henüz katman oluşturulmadı. İstatistik panelinden bir indeks seçip "Harita
+                            Katmanı Oluştur" butonuna tıklayın.</p>
+                    </div>
                 </div>
             </div>
 
@@ -198,21 +208,21 @@
             <div class="panel result-panel" id="panel-result" style="display: none;">
                 <div class="panel-header">
                     <span class="step-badge result">OK</span>
-                    <h2>NDVI Sonucu</h2>
+                    <h2 id="result-title">İndeks Sonucu</h2>
                 </div>
                 <div class="panel-content">
                     <div class="ndvi-display">
-                        <div class="ndvi-value" id="ndvi-point">
-                            <span class="label">Nokta NDVI</span>
+                        <div class="ndvi-value" id="point-result">
+                            <span class="label" id="point-result-label">Nokta Değeri</span>
                             <span class="value">-</span>
                         </div>
-                        <div class="ndvi-value" id="ndvi-mean">
-                            <span class="label">Ortalama NDVI</span>
+                        <div class="ndvi-value" id="mean-result">
+                            <span class="label" id="mean-result-label">Ortalama Değer</span>
                             <span class="value">-</span>
                         </div>
                     </div>
                     <div class="ndvi-scale">
-                        <div class="scale-bar"></div>
+                        <div class="scale-bar" id="result-scale-bar"></div>
                         <div class="scale-labels">
                             <span>-1</span>
                             <span>0</span>
@@ -221,7 +231,112 @@
                         </div>
                         <div class="scale-marker" id="scale-marker"></div>
                     </div>
-                    <div class="ndvi-interpretation" id="ndvi-interpretation"></div>
+                    <div class="ndvi-interpretation" id="result-interpretation"></div>
+                </div>
+            </div>
+
+            <!-- Step 5: Zonal Statistics Panel -->
+            <div class="panel stats-panel" id="panel-stats">
+                <div class="panel-header">
+                    <span class="step-badge stats">📊</span>
+                    <h2>Alan İstatistikleri</h2>
+                </div>
+                <div class="panel-content">
+                    <!-- Index Selector -->
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label for="index-select">İndeks Seçin</label>
+                        <select id="index-select" class="form-control">
+                            <option value="ndvi" selected>🌿 NDVI - Bitki Örtüsü</option>
+                            <option value="ndwi">💧 NDWI - Su İndeksi</option>
+                            <option value="evi">🌳 EVI - Gelişmiş Bitki</option>
+                            <option value="savi">🏜️ SAVI - Toprak Ayarlı</option>
+                            <option value="nbr">🔥 NBR - Yangın Oranı</option>
+                        </select>
+                    </div>
+
+                    <!-- Statistics Summary -->
+                    <div class="stats-grid" id="stats-grid">
+                        <div class="stat-item">
+                            <span class="stat-label">Min</span>
+                            <span class="stat-value" id="stat-min">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Max</span>
+                            <span class="stat-value" id="stat-max">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Ortalama</span>
+                            <span class="stat-value" id="stat-mean">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Std. Sapma</span>
+                            <span class="stat-value" id="stat-std">-</span>
+                        </div>
+                    </div>
+
+                    <!-- Histogram -->
+                    <div class="histogram-container" id="histogram-container">
+                        <h4>Değer Dağılımı</h4>
+                        <canvas id="histogram-canvas" width="280" height="120"></canvas>
+                    </div>
+
+                    <!-- Classification -->
+                    <div class="classification-container" id="classification-container">
+                        <h4>Sınıflandırma</h4>
+                        <div class="class-list" id="class-list"></div>
+                    </div>
+
+                    <!-- Calculate Button -->
+                    <button class="btn btn-stats" id="btn-calculate-stats">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 3v18h18" />
+                            <path d="M18 17V9" />
+                            <path d="M13 17V5" />
+                            <path d="M8 17v-3" />
+                        </svg>
+                        İstatistik Hesapla
+                    </button>
+
+                    <!-- Export Buttons -->
+                    <div class="export-buttons" id="export-buttons" style="margin-top: 12px;">
+                        <div class="btn-group">
+                            <button class="btn btn-export" id="btn-export-csv">
+                                📄 CSV İndir
+                            </button>
+                            <button class="btn btn-export" id="btn-export-json">
+                                📋 JSON İndir
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Create Map Button -->
+                    <button class="btn btn-map-create" id="btn-create-map" style="margin-top: 12px;">
+                        🗺️ Harita Katmanı Oluştur
+                    </button>
+
+                    <!-- Point Query Section (integrated) -->
+                    <div class="point-query-section"
+                        style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+                        <h4 style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 10px;">📍 Nokta
+                            Sorgusu</h4>
+                        <p class="hint" style="margin-bottom: 10px; font-size: 0.75rem;">Haritaya tıklayın veya
+                            koordinat girin</p>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="lat">Enlem</label>
+                                <input type="number" id="lat" step="0.0001" placeholder="40.5">
+                            </div>
+                            <div class="form-group">
+                                <label for="lon">Boylam</label>
+                                <input type="number" id="lon" step="0.0001" placeholder="29.5">
+                            </div>
+                        </div>
+
+                        <button class="btn btn-success btn-sm" id="btn-point-query" style="width: 100%;">
+                            📍 Nokta Değeri Hesapla
+                        </button>
+                    </div>
                 </div>
             </div>
         </aside>
@@ -229,7 +344,7 @@
         <!-- Map Area -->
         <main class="map-area">
             <div id="map"></div>
-            
+
             <!-- Status Bar -->
             <div class="status-bar" id="status-bar">
                 <div class="status-item">
@@ -241,7 +356,7 @@
                     <span class="status-value" id="coords-text">-</span>
                 </div>
             </div>
-            
+
             <!-- Loading Overlay -->
             <div class="loading-overlay" id="loading" style="display: none;">
                 <div class="loader">
@@ -257,11 +372,12 @@
 
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    
+
     <!-- Leaflet Draw JS -->
     <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-    
+
     <!-- Custom JS -->
-    <script src="/static/js/app.js?v=4"></script>
+    <script src="/static/js/app.js?v=6"></script>
 </body>
+
 </html>

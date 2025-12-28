@@ -83,7 +83,7 @@ def calculate_ndvi(band_folder: str, lat: float, lon: float) -> dict:
     
     pixel_x = int((utm_x - gt[0]) / gt[1])
     pixel_y = int((utm_y - gt[3]) / gt[5])
-    
+
     print(f"[NDVI] Piksel koordinatlari: ({pixel_x}, {pixel_y})")
     print(f"[NDVI] Raster boyutu: {ds_red.RasterXSize} x {ds_red.RasterYSize}")
 
@@ -94,7 +94,7 @@ def calculate_ndvi(band_folder: str, lat: float, lon: float) -> dict:
     
     if 0 <= pixel_x < ds_red.RasterXSize and 0 <= pixel_y < ds_red.RasterYSize:
         raw_value = float(ndvi[pixel_y, pixel_x])
-        
+
         # NoData kontrolu (NaN veya siyah alan)
         if np.isnan(raw_value):
             point_ndvi = None

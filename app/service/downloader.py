@@ -6,6 +6,7 @@ import json
 import hashlib
 import datetime
 import requests
+import threading
 from collections import Counter
 from pydantic import BaseModel
 from typing import Optional
@@ -31,10 +32,39 @@ DATE_AUTO_RANGE = config["DATE_AUTO_RANGE"]
 
 MAX_PRODUCTS = config.get("MAX_PRODUCTS", 10)
 
+# Cancellation mechanism for page refresh
+_cancel_flag = threading.Event()
+_cancel_lock = threading.Lock()
+
+
+def set_cancel_flag():
+    """İptal bayrağını ayarla - sayfa yenilendiğinde çağrılır"""
+    with _cancel_lock:
+        _cancel_flag.set()
+        print("[CANCEL] Cancellation flag set - operations will be aborted")
+
+
+def reset_cancel_flag():
+    """İptal bayrağını sıfırla - yeni indirme başlamadan önce çağrılır"""
+    with _cancel_lock:
+        _cancel_flag.clear()
+        print("[CANCEL] Cancellation flag cleared")
+
+
+def is_cancelled() -> bool:
+    """İptal bayrağını kontrol et"""
+    return _cancel_flag.is_set()
+
+
+class CancelledException(Exception):
+    """İşlem iptal edildiğinde fırlatılan exception"""
+    pass
+
 
 print(f"[CONFIG] [OK] Configuration loaded from: {config_path}")
 print(f"[CONFIG] Collection: {COLLECTION_NAME}, Product Type: {PRODUCT_TYPE}")
 print(f"[CONFIG] Output: {OUTPUT_PATH}, Extract: {EXTRACT_PATH}")
+
 
 
 def geojson_to_wkt(geojson_path: str) -> str:
@@ -171,10 +201,10 @@ def download_product(
     output_folder: str
 ) -> dict:
     """
-    Tek bir ürünü indirir
+    Tek bir ürünü indirir - iptal edilebilir
 
     Returns:
-        dict: {"success": bool, "message": str, "filename": str}
+        dict: {"success": bool, "message": str, "filename": str, "cancelled": bool}
     """
     filename = os.path.join(output_folder, f"{product_name}.zip")
 
@@ -184,7 +214,18 @@ def download_product(
         return {
             "success": False,
             "message": "File already exists",
-            "filename": filename
+            "filename": filename,
+            "cancelled": False
+        }
+
+    # İndirme başlamadan önce iptal kontrolü
+    if is_cancelled():
+        print(f"[DOWNLOAD] Cancelled before starting: {os.path.basename(filename)}")
+        return {
+            "success": False,
+            "message": "Operation cancelled by user",
+            "filename": None,
+            "cancelled": True
         }
 
     url = f"https://download.dataspace.copernicus.eu/odata/v1/Products({product_id})/$value"
@@ -193,15 +234,31 @@ def download_product(
     print(f"[DOWNLOAD] Starting: {os.path.basename(filename)}")
 
     try:
-        with requests.get(url, headers=headers, stream=True) as r:
+        with requests.get(url, headers=headers, stream=True, timeout=30) as r:
             r.raise_for_status()
 
             # Dosya boyutu
             total_size = int(r.headers.get('content-length', 0))
             downloaded = 0
+            last_check = 0
 
             with open(filename, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
+                    # Her 1MB'da bir iptal kontrolü yap
+                    if downloaded - last_check > 1024 * 1024:
+                        if is_cancelled():
+                            print(f"\n[DOWNLOAD] Cancelled during download: {os.path.basename(filename)}")
+                            f.close()
+                            if os.path.exists(filename):
+                                os.remove(filename)
+                            return {
+                                "success": False,
+                                "message": "Operation cancelled by user",
+                                "filename": None,
+                                "cancelled": True
+                            }
+                        last_check = downloaded
+
                     f.write(chunk)
                     downloaded += len(chunk)
 
@@ -216,7 +273,8 @@ def download_product(
             return {
                 "success": True,
                 "message": "Download completed",
-                "filename": filename
+                "filename": filename,
+                "cancelled": False
             }
 
     except Exception as e:
@@ -226,13 +284,15 @@ def download_product(
         return {
             "success": False,
             "message": str(e),
-            "filename": None
+            "filename": None,
+            "cancelled": False
         }
 
 
 def extract_zip(zip_path: str) -> dict:
     """
-    Zip dosyasını extract eder
+    Zip dosyasını extract eder ve sadece R10m dosyalarını tutar.
+    R20m ve R60m klasörleri silinerek storage tasarrufu sağlanır.
 
     Returns:
         dict: {"success": bool, "message": str, "folder": str}
@@ -268,6 +328,8 @@ def extract_zip(zip_path: str) -> dict:
                     if os.path.exists(src_path) and not os.path.exists(dst_path):
                         os.rename(src_path, dst_path)
                         print(f"[EXTRACT] [OK] Extracted and renamed to: {prefix}_{top_folder}")
+                        # R20m ve R60m klasörlerini sil
+                        cleanup_unwanted_resolutions(dst_path)
                         return {
                             "success": True,
                             "message": "Extracted and renamed",
@@ -282,6 +344,8 @@ def extract_zip(zip_path: str) -> dict:
                         }
                 else:
                     print(f"[EXTRACT] [OK] Extracted: {top_folder}")
+                    # R20m ve R60m klasörlerini sil
+                    cleanup_unwanted_resolutions(src_path)
                     return {
                         "success": True,
                         "message": "Extracted",
@@ -302,6 +366,52 @@ def extract_zip(zip_path: str) -> dict:
             "message": str(e),
             "folder": None
         }
+
+
+def cleanup_unwanted_resolutions(safe_folder: str):
+    """
+    Gereksiz bantları silerek storage tasarrufu sağlar.
+    R10m: Tüm bantları koru (B02, B03, B04, B08)
+    R20m: Sadece B12'yi koru (NBR için gerekli), diğerlerini sil
+    R60m: Tamamen sil
+    """
+    import shutil
+    
+    try:
+        # GRANULE klasörünü bul
+        granule_path = os.path.join(safe_folder, "GRANULE")
+        if not os.path.exists(granule_path):
+            return
+        
+        # Her granule için işlem yap
+        for granule_dir in os.listdir(granule_path):
+            img_data_path = os.path.join(granule_path, granule_dir, "IMG_DATA")
+            if not os.path.exists(img_data_path):
+                continue
+            
+            # R20m: Sadece B12'yi koru, diğerlerini sil
+            r20m_path = os.path.join(img_data_path, "R20m")
+            if os.path.exists(r20m_path):
+                for f in os.listdir(r20m_path):
+                    # B12 bantını koru (NBR için gerekli)
+                    if "_B12_" not in f:
+                        file_path = os.path.join(r20m_path, f)
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                print(f"[CLEANUP] R20m: Kept only B12, deleted others")
+            
+            # R60m klasörünü tamamen sil
+            r60m_path = os.path.join(img_data_path, "R60m")
+            if os.path.exists(r60m_path):
+                shutil.rmtree(r60m_path)
+                print(f"[CLEANUP] Deleted R60m folder")
+        
+        print(f"[CLEANUP] Cleanup complete for {os.path.basename(safe_folder)}")
+        
+    except Exception as e:
+        print(f"[CLEANUP WARN] Could not cleanup: {e}")
+        # Temizlik başarısız olsa bile devam et
+
 
 
 def calculate_dates(date_auto:bool,start_date,end_date) -> tuple:
@@ -379,6 +489,18 @@ def download_sentinel_product(geojson_name, start_date, end_date, date_auto, clo
         failed_products = []
 
         for tile_id, product in tiles.items():
+            # Her tile öncesi iptal kontrolü
+            if is_cancelled():
+                print(f"[CDSE] Operation cancelled - stopping tile downloads")
+                return {
+                    "success": False,
+                    "message": "Operation cancelled by user",
+                    "product": None,
+                    "products": downloaded_products,
+                    "tiles": list(tiles.keys()),
+                    "cancelled": True
+                }
+            
             print(f"[CDSE] Downloading tile {tile_id}: {product['Name']}")
 
             download_result = download_product(
@@ -387,6 +509,18 @@ def download_sentinel_product(geojson_name, start_date, end_date, date_auto, clo
                 product["Name"],
                 OUTPUT_PATH
             )
+
+            # İndirme iptal edildiyse dur
+            if download_result.get("cancelled"):
+                print(f"[CDSE] Download cancelled - stopping")
+                return {
+                    "success": False,
+                    "message": "Operation cancelled by user",
+                    "product": None,
+                    "products": downloaded_products,
+                    "tiles": list(tiles.keys()),
+                    "cancelled": True
+                }
 
             if download_result["success"]:
                 extract_result = extract_zip(download_result["filename"])

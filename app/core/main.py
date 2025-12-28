@@ -1,13 +1,17 @@
 import os
 import json
-from fastapi import FastAPI, HTTPException, UploadFile, File
+import threading
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-from app.service.downloader import DownloadRequest, download_sentinel_product, find_sentinel_band_folder
+from app.service.downloader import DownloadRequest, download_sentinel_product, find_sentinel_band_folder, set_cancel_flag, reset_cancel_flag, is_cancelled
 from app.service.calculate_ndvi import calculate_ndvi
+from app.service.raster_service import create_rgb_composite, create_ndvi_raster, create_index_raster, list_rasters
+from app.service.statistics import calculate_zonal_stats, get_point_stats
+from app.service.export_service import export_to_csv, export_stats_to_json, list_exports
 import uvicorn
 
 GEOJSON_PATH = "./geojson"
@@ -36,6 +40,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class SessionState:
     def __init__(self):
         self._band_folders: list[str] = []
+        self._is_downloading: bool = False
 
     def add_band_folder(self, folder: str):
         if folder not in self._band_folders:
@@ -55,6 +60,12 @@ class SessionState:
 
     def clear(self):
         self._band_folders = []
+
+    def set_downloading(self, status: bool):
+        self._is_downloading = status
+
+    def is_downloading(self) -> bool:
+        return self._is_downloading
 
 
 state = SessionState()
@@ -84,6 +95,164 @@ class NDVIResponse(BaseModel):
     message: Optional[str] = None
 
 
+
+# ============================================
+# Cancellation Endpoint
+# ============================================
+
+@app.post("/api/cancel")
+def cancel_operations():
+    """
+    Mevcut indirme işlemlerini iptal eder.
+    Sayfa yenilendiğinde frontend tarafından çağrılır.
+    """
+    set_cancel_flag()
+    state.set_downloading(False)
+    print("[API] Cancel request received - all operations will be aborted")
+    return {"success": True, "message": "Cancellation signal sent"}
+
+
+# ============================================
+# Statistics Endpoints
+# ============================================
+
+class ZonalStatsRequest(BaseModel):
+    index_type: str = "ndvi"
+    band_folder: Optional[str] = None
+
+class PointStatsRequest(BaseModel):
+    lat: float
+    lon: float
+    index_type: str = "ndvi"
+    band_folder: Optional[str] = None
+    window_size: int = 5
+
+
+@app.post("/api/stats/zonal")
+def api_zonal_stats(req: ZonalStatsRequest):
+    """
+    Zonal istatistikleri hesaplar.
+    
+    - **index_type**: İndeks tipi (ndvi, ndwi, evi, savi, nbr)
+    - **band_folder**: Band folder yolu (opsiyonel, belirtilmezse son indirilen kullanılır)
+    """
+    band_folder = req.band_folder or state.get_latest_band_folder()
+    
+    if not band_folder:
+        raise HTTPException(status_code=400, detail="Band folder belirtilmeli veya önce veri indirilmeli")
+    
+    result = calculate_zonal_stats(band_folder, req.index_type)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message", "İstatistik hesaplama hatası"))
+    
+    return result
+
+
+@app.post("/api/stats/point")
+def api_point_stats(req: PointStatsRequest):
+    """
+    Belirli bir nokta için istatistikleri hesaplar.
+    
+    - **lat**: Enlem
+    - **lon**: Boylam
+    - **index_type**: İndeks tipi
+    - **window_size**: Pencere boyutu (piksel)
+    """
+    band_folder = req.band_folder or state.get_latest_band_folder()
+    
+    if not band_folder:
+        raise HTTPException(status_code=400, detail="Band folder belirtilmeli veya önce veri indirilmeli")
+    
+    result = get_point_stats(band_folder, req.lat, req.lon, req.index_type, req.window_size)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message", "Nokta istatistik hatası"))
+    
+    return result
+
+
+@app.get("/api/stats/available-indices")
+def get_available_indices():
+    """Kullanılabilir indeksleri listeler"""
+    return {
+        "indices": [
+            {"id": "ndvi", "name": "NDVI", "description": "Normalized Difference Vegetation Index", "bands": ["B04", "B08"]},
+            {"id": "ndwi", "name": "NDWI", "description": "Normalized Difference Water Index", "bands": ["B03", "B08"]},
+            {"id": "evi", "name": "EVI", "description": "Enhanced Vegetation Index", "bands": ["B02", "B04", "B08"]},
+            {"id": "savi", "name": "SAVI", "description": "Soil-Adjusted Vegetation Index", "bands": ["B04", "B08"]},
+            {"id": "nbr", "name": "NBR", "description": "Normalized Burn Ratio", "bands": ["B08", "B12"]}
+        ]
+    }
+
+
+# ============================================
+# Export Endpoints
+# ============================================
+
+class ExportRequest(BaseModel):
+    index_type: str = "ndvi"
+    format: str = "csv"  # csv veya json
+
+
+@app.post("/api/export/stats")
+def api_export_stats(req: ExportRequest):
+    """İstatistikleri dışa aktar (CSV veya JSON)"""
+    band_folder = state.get_latest_band_folder()
+    
+    if not band_folder:
+        raise HTTPException(status_code=400, detail="Önce veri indirin")
+    
+    # Önce istatistik hesapla
+    stats = calculate_zonal_stats(band_folder, req.index_type)
+    
+    if not stats.get("success"):
+        raise HTTPException(status_code=500, detail=stats.get("message"))
+    
+    # Export et
+    if req.format == "json":
+        result = export_stats_to_json(stats)
+    else:
+        result = export_to_csv(stats)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message"))
+    
+    return result
+
+
+@app.get("/api/export/list")
+def api_list_exports():
+    """Mevcut export dosyalarını listeler"""
+    return {"exports": list_exports()}
+
+
+# ============================================
+# Raster Generation Endpoints
+# ============================================
+
+class CreateRasterRequest(BaseModel):
+    index_type: str = "ndvi"
+
+
+@app.post("/api/raster/create")
+def api_create_index_raster(req: CreateRasterRequest):
+    """
+    Belirtilen indeks tipine göre harita katmanı oluşturur.
+    
+    - **index_type**: ndvi, ndwi, evi, savi, nbr
+    """
+    band_folder = state.get_latest_band_folder()
+    
+    if not band_folder:
+        raise HTTPException(status_code=400, detail="Önce veri indirin")
+    
+    result = create_index_raster(band_folder, req.index_type)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message"))
+    
+    return result
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -159,13 +328,20 @@ def api_download(req: DownloadRequest):
     - **date_auto**: True ise otomatik tarih araligi kullanilir
     - **cloudcover_max**: Maksimum bulut ortusu yuzdesi
     """
-    result = download_sentinel_product(
-        geojson_name=req.geojson_name,
-        start_date=req.start_date,
-        end_date=req.end_date,
-        date_auto=req.date_auto,
-        cloudcover_max=req.cloudcover_max
-    )
+    # İptal bayrağını sıfırla ve indirme durumunu ayarla
+    reset_cancel_flag()
+    state.set_downloading(True)
+    
+    try:
+        result = download_sentinel_product(
+            geojson_name=req.geojson_name,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            date_auto=req.date_auto,
+            cloudcover_max=req.cloudcover_max
+        )
+    finally:
+        state.set_downloading(False)
 
     if not result.get("success"):
         raise HTTPException(
@@ -193,6 +369,10 @@ def api_download(req: DownloadRequest):
             status_code=500,
             detail="Products downloaded but no band folders found"
         )
+
+    # Otomatik raster oluşturma kaldırıldı
+    # Kullanıcı manuel olarak "Harita Katmanı Oluştur" butonuyla istediği indeksi oluşturabilir
+    print(f"[API] Download complete. User can now create index layers manually.")
 
     return DownloadResponse(
         success=True,
@@ -299,6 +479,123 @@ def get_band_folders():
         "band_folders": state.get_band_folders(),
         "count": len(state.get_band_folders()),
         "latest": state.get_latest_band_folder()
+    }
+
+
+# ============================================
+# Raster Endpoints
+# ============================================
+
+class RasterRequest(BaseModel):
+    band_folder: Optional[str] = None  # Belirtilmezse tüm tile'lar için oluşturulur
+    raster_type: str = "rgb"  # "rgb" veya "ndvi"
+
+
+class RasterResponse(BaseModel):
+    success: bool
+    message: str
+    rasters: Optional[list] = None
+
+
+@app.post("/raster/create", response_model=RasterResponse)
+def create_raster(req: RasterRequest):
+    """
+    İndirilen Sentinel-2 görüntülerinden raster oluşturur.
+    
+    - **raster_type**: "rgb" (True Color) veya "ndvi" (NDVI renk haritası)
+    - **band_folder**: Belirli bir tile için (opsiyonel, belirtilmezse tüm tile'lar)
+    """
+    # Band folder'ları belirle
+    if req.band_folder:
+        band_folders = [req.band_folder]
+    else:
+        band_folders = state.get_band_folders()
+    
+    if not band_folders:
+        raise HTTPException(
+            status_code=400,
+            detail="Henüz indirilmiş görüntü yok. Önce Sentinel-2 indirin."
+        )
+    
+    created_rasters = []
+    errors = []
+    
+    for band_folder in band_folders:
+        try:
+            if req.raster_type == "rgb":
+                result = create_rgb_composite(band_folder)
+            elif req.raster_type == "ndvi":
+                result = create_ndvi_raster(band_folder)
+            else:
+                raise HTTPException(status_code=400, detail="Geçersiz raster tipi. 'rgb' veya 'ndvi' kullanın.")
+            
+            if result.get("success"):
+                created_rasters.append({
+                    "band_folder": band_folder,
+                    "web_path": result.get("web_path"),
+                    "bounds": result.get("bounds"),
+                    "type": req.raster_type
+                })
+            else:
+                errors.append(f"{band_folder}: {result.get('message')}")
+                
+        except Exception as e:
+            errors.append(f"{band_folder}: {str(e)}")
+    
+    if not created_rasters:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Raster oluşturulamadı: {'; '.join(errors)}"
+        )
+    
+    return RasterResponse(
+        success=True,
+        message=f"{len(created_rasters)} raster oluşturuldu",
+        rasters=created_rasters
+    )
+
+
+@app.get("/raster/list")
+def get_rasters():
+    """Mevcut raster dosyalarını listeler"""
+    return {
+        "rasters": list_rasters()
+    }
+
+
+@app.post("/raster/create-all")
+def create_all_rasters():
+    """
+    Tüm indirilen tile'lar için NDVI raster oluşturur.
+    RGB artık oluşturulmaz - base map katmanları kullanılır.
+    İndirme sonrası otomatik çağrılabilir.
+    """
+    band_folders = state.get_band_folders()
+    
+    if not band_folders:
+        raise HTTPException(
+            status_code=400,
+            detail="Henüz indirilmiş görüntü yok."
+        )
+    
+    results = {
+        "rgb": [],  # Artık boş - geriye dönük uyumluluk için tutuldu
+        "ndvi": []
+    }
+    
+    for band_folder in band_folders:
+        # Sadece NDVI oluştur (RGB base map'lerden sağlanıyor)
+        ndvi_result = create_ndvi_raster(band_folder)
+        if ndvi_result.get("success"):
+            results["ndvi"].append({
+                "web_path": ndvi_result.get("web_path"),
+                "bounds": ndvi_result.get("bounds")
+            })
+    
+    return {
+        "success": True,
+        "message": f"NDVI: {len(results['ndvi'])} raster oluşturuldu",
+        "rasters": results
     }
 
 

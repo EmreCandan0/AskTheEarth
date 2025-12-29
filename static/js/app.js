@@ -27,7 +27,17 @@ const state = {
     isDownloading: false, // İndirme durumu
     // Index layers for all types
     indexLayers: {}, // { ndvi: layer, ndwi: layer, ... }
-    layerOpacity: 0.8
+    layerOpacity: 0.8,
+    // İstatistik cache - her indeks tipi için hesaplanan veriler
+    statsCache: {}, // { ndvi: { statistics, histogram, classification }, nbr: {...}, ... }
+    // AOI (Area of Interest) - çizilen alan geometrisi
+    aoiGeometry: null, // GeoJSON geometry
+    drawMode: 'rectangle', // 'rectangle' veya 'polygon'
+    // AI Chat state
+    chatMessages: [],
+    geminiApiKey: localStorage.getItem('gemini_api_key') || '',
+    aiProvider: 'gemini',
+    isChatLoading: false
 };
 
 // ============================================
@@ -128,6 +138,18 @@ map.addLayer(drawnItems);
 
 // Rectangle draw options
 const rectangleDrawOptions = {
+    shapeOptions: {
+        color: '#22c55e',
+        fillColor: '#22c55e',
+        fillOpacity: 0.15,
+        weight: 2
+    }
+};
+
+// Polygon draw options
+const polygonDrawOptions = {
+    allowIntersection: false,
+    showArea: true,
     shapeOptions: {
         color: '#22c55e',
         fillColor: '#22c55e',
@@ -268,6 +290,7 @@ async function saveGeneratedGeoJSON(geojson) {
 // ============================================
 map.on('draw:created', async (e) => {
     const layer = e.layer;
+    const layerType = e.layerType; // 'rectangle' veya 'polygon'
 
     // Clear previous drawings
     drawnItems.clearLayers();
@@ -280,6 +303,11 @@ map.on('draw:created', async (e) => {
     state.drawnLayer = layer;
     state.drawnBounds = layer.getBounds();
 
+    // Layer'dan GeoJSON geometry al ve sakla
+    const layerGeoJSON = layer.toGeoJSON();
+    state.aoiGeometry = layerGeoJSON.geometry;
+    console.log('[DRAW] AOI Geometry saved:', state.aoiGeometry.type);
+
     // Update UI
     const nw = state.drawnBounds.getNorthWest();
     const se = state.drawnBounds.getSouthEast();
@@ -288,7 +316,6 @@ map.on('draw:created', async (e) => {
     const coordSE = document.getElementById('coord-se');
     const drawnAreaInfo = document.getElementById('drawn-area-info');
     const btnClearDraw = document.getElementById('btn-clear-draw');
-    const btnStartDraw = document.getElementById('btn-start-draw');
     const fileInfo = document.getElementById('file-info');
     const existingGeojson = document.getElementById('existing-geojson');
 
@@ -296,18 +323,19 @@ map.on('draw:created', async (e) => {
     if (coordSE) coordSE.textContent = `${se.lat.toFixed(4)}, ${se.lng.toFixed(4)}`;
     if (drawnAreaInfo) drawnAreaInfo.style.display = 'block';
     if (btnClearDraw) btnClearDraw.style.display = 'flex';
-    if (btnStartDraw) {
-        btnStartDraw.innerHTML = `
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-                <rect x="3" y="3" width="18" height="18" rx="2"/>
-                <path d="M3 9h18M9 21V9"/>
-            </svg>
-            Yeniden Ciz
-        `;
-    }
 
-    // Generate and save GeoJSON
-    const geojson = boundsToGeoJSON(state.drawnBounds);
+    // GeoJSON olustur ve kaydet (poligon veya dikdortgen)
+    let geojson;
+    if (state.aoiGeometry.type === 'Polygon') {
+        // Poligon icin direkt layer'dan al
+        geojson = {
+            type: 'FeatureCollection',
+            features: [layerGeoJSON]
+        };
+    } else {
+        // Dikdortgen icin bounds'tan olustur
+        geojson = boundsToGeoJSON(state.drawnBounds);
+    }
 
     try {
         showLoading('Alan kaydediliyor...');
@@ -336,10 +364,19 @@ map.on('draw:drawstop', () => {
 });
 
 // ============================================
-// Start Drawing Function
+// Start Drawing Function (Rectangle)
 // ============================================
 function startDrawing() {
-    console.log('startDrawing called!');
+    startDrawingWithMode('rectangle');
+}
+
+function startDrawingPolygon() {
+    startDrawingWithMode('polygon');
+}
+
+function startDrawingWithMode(mode) {
+    console.log(`startDrawing called with mode: ${mode}`);
+    state.drawMode = mode;
 
     try {
         // Disable any existing draw handler
@@ -354,11 +391,16 @@ function startDrawing() {
             return;
         }
 
-        // Create and enable new rectangle draw handler
-        state.drawHandler = new L.Draw.Rectangle(map, rectangleDrawOptions);
-        state.drawHandler.enable();
+        // Create draw handler based on mode
+        if (mode === 'polygon') {
+            state.drawHandler = new L.Draw.Polygon(map, polygonDrawOptions);
+            showToast('Haritada poligon cizin (cift tikla tamamla)', 'info');
+        } else {
+            state.drawHandler = new L.Draw.Rectangle(map, rectangleDrawOptions);
+            showToast('Haritada dikdortgen cizin', 'info');
+        }
 
-        showToast('Haritada dikdortgen cizin', 'info');
+        state.drawHandler.enable();
         setStatus('Cizim modu aktif...');
     } catch (error) {
         console.error('startDrawing error:', error);
@@ -376,22 +418,13 @@ function clearDrawing() {
     state.drawnLayer = null;
     state.drawnBounds = null;
     state.selectedFileName = null;
+    state.aoiGeometry = null; // AOI'yi de temizle
 
     const drawnAreaInfo = document.getElementById('drawn-area-info');
     const btnClearDraw = document.getElementById('btn-clear-draw');
-    const btnStartDraw = document.getElementById('btn-start-draw');
 
     if (drawnAreaInfo) drawnAreaInfo.style.display = 'none';
     if (btnClearDraw) btnClearDraw.style.display = 'none';
-    if (btnStartDraw) {
-        btnStartDraw.innerHTML = `
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-                <rect x="3" y="3" width="18" height="18" rx="2"/>
-                <path d="M3 9h18M9 21V9"/>
-            </svg>
-            Dikdortgen Ciz
-        `;
-    }
 
     setStatus('Hazir');
     showToast('Alan temizlendi', 'info');
@@ -576,6 +609,7 @@ async function handleExistingFileSelect(filename) {
     drawnItems.clearLayers();
     state.drawnLayer = null;
     state.drawnBounds = null;
+    state.aoiGeometry = null; // Reset AOI
 
     const drawnAreaInfo = document.getElementById('drawn-area-info');
     const btnClearDraw = document.getElementById('btn-clear-draw');
@@ -589,6 +623,19 @@ async function handleExistingFileSelect(filename) {
         if (response.ok) {
             const geojson = await response.json();
             displayGeoJSON(geojson);
+
+            // AOI geometry'yi set et (stats hesaplaması için)
+            if (geojson.features && geojson.features.length > 0) {
+                state.aoiGeometry = geojson.features[0].geometry;
+                console.log('[GEOJSON] AOI geometry loaded from file:', state.aoiGeometry.type);
+
+                // Bounds'u da set et
+                if (state.geojsonLayer) {
+                    state.drawnBounds = state.geojsonLayer.getBounds();
+                    console.log('[GEOJSON] Bounds set from loaded layer');
+                }
+            }
+
             showToast('GeoJSON yuklendi', 'success');
             setStatus('GeoJSON secildi');
         }
@@ -653,10 +700,16 @@ async function handleDownload() {
             const tileNames = data.tiles ? data.tiles.join(', ') : '';
 
             showToast(`${tileCount} tile indirildi: ${tileNames}`, 'success');
-            setStatus('Hazır - İndeks katmanı oluşturabilirsiniz');
+            setStatus('RGB görüntüsü oluşturuluyor...');
 
-            // Otomatik raster yükleme kaldırıldı
-            // Kullanıcı manuel olarak "Harita Katmanı Oluştur" butonuna tıklayacak
+            // Otomatik RGB görüntüsü oluştur ve haritaya ekle
+            try {
+                await autoCreateRGBLayers();
+                setStatus('Hazır - İndeks katmanı oluşturabilirsiniz');
+            } catch (rgbErr) {
+                console.error('RGB oluşturma hatası:', rgbErr);
+                setStatus('Hazır - RGB oluşturulamadı');
+            }
         } else {
             showToast(data.detail || 'Indirme hatasi', 'error');
             setStatus('Hata');
@@ -840,6 +893,52 @@ async function calculateNDVI() {
 // ============================================
 // Raster Layer Management
 // ============================================
+
+async function autoCreateRGBLayers() {
+    // İndirme sonrası otomatik RGB görüntü oluşturma
+    if (!state.bandFolders || state.bandFolders.length === 0) {
+        console.warn('[RGB] No band folders available');
+        return;
+    }
+
+    console.log('[RGB] Creating RGB layers for', state.bandFolders.length, 'tiles');
+
+    for (const bandFolder of state.bandFolders) {
+        try {
+            const response = await fetch('/raster/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    band_folder: bandFolder,
+                    raster_type: 'rgb'
+                })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                console.log('[RGB] Created RGB for:', bandFolder);
+
+                // Haritaya ekle
+                if (data.web_path && data.bounds) {
+                    const layer = addImageOverlay(data.web_path, data.bounds, 'rgb');
+                    if (layer) {
+                        state.rgbLayers.push(layer);
+                        showToast('RGB görüntüsü eklendi', 'success');
+                    }
+                }
+            } else {
+                console.error('[RGB] Failed:', data.detail || 'Unknown error');
+            }
+        } catch (err) {
+            console.error('[RGB] Error creating RGB:', err);
+        }
+    }
+
+    // Layer kontrollerini göster
+    const layerControls = document.getElementById('layer-controls');
+    if (layerControls) layerControls.style.display = 'block';
+}
 
 async function autoLoadRasters() {
     // İndirme sonrası otomatik olarak görüntüleri yükle
@@ -1207,7 +1306,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Event Listeners
     // ============================================
 
-    // Draw button
+    // Draw button (Rectangle)
     const btnStartDraw = document.getElementById('btn-start-draw');
     if (btnStartDraw) {
         btnStartDraw.addEventListener('click', (e) => {
@@ -1217,6 +1316,16 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('Draw button listener attached');
     } else {
         console.error('btn-start-draw not found');
+    }
+
+    // Draw Polygon button
+    const btnDrawPolygon = document.getElementById('btn-draw-polygon');
+    if (btnDrawPolygon) {
+        btnDrawPolygon.addEventListener('click', (e) => {
+            e.preventDefault();
+            startDrawingPolygon();
+        });
+        console.log('Polygon draw button listener attached');
     }
 
     // Clear draw button
@@ -1358,6 +1467,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // İndeks tipi değiştiğinde cache'den istatistikleri göster
+    const indexSelect = document.getElementById('index-select');
+    if (indexSelect) {
+        indexSelect.addEventListener('change', () => {
+            onIndexTypeChange();
+        });
+    }
+
     setStatus('Hazir');
     console.log('AskTheEarth initialized successfully');
 });
@@ -1380,15 +1497,35 @@ async function calculateZonalStats() {
     setStatus(`${indexType.toUpperCase()} hesaplanıyor...`);
 
     try {
+        // Request body - AOI varsa ekle
+        const requestBody = {
+            index_type: indexType
+        };
+
+        // DEBUG: AOI durumunu kontrol et
+        console.log('[STATS DEBUG] state.aoiGeometry:', state.aoiGeometry);
+        console.log('[STATS DEBUG] state.drawnBounds:', state.drawnBounds);
+
+        if (state.aoiGeometry) {
+            requestBody.aoi_geojson = state.aoiGeometry;
+            console.log('[STATS] Sending AOI geometry for zonal stats:', JSON.stringify(state.aoiGeometry).substring(0, 200));
+        } else {
+            console.warn('[STATS] WARNING: No AOI geometry! Stats will be calculated for entire tile.');
+        }
+
         const response = await fetch('/api/stats/zonal', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ index_type: indexType })
+            body: JSON.stringify(requestBody)
         });
 
         const data = await response.json();
 
         if (response.ok && data.success) {
+            // Cache'e kaydet
+            state.statsCache[indexType] = data;
+            console.log(`[STATS] Cached stats for ${indexType}`);
+
             displayZonalStats(data);
             showToast('İstatistikler hesaplandı', 'success');
             setStatus('İstatistikler hazır');
@@ -1403,6 +1540,124 @@ async function calculateZonalStats() {
     } finally {
         hideLoading();
     }
+}
+
+// ============================================
+// Calculate Point Index Value
+// ============================================
+async function calculatePointIndex() {
+    const latInput = document.getElementById('lat');
+    const lonInput = document.getElementById('lon');
+    const indexSelect = document.getElementById('index-select');
+
+    const lat = parseFloat(latInput?.value);
+    const lon = parseFloat(lonInput?.value);
+    const indexType = indexSelect ? indexSelect.value : 'ndvi';
+    const indexName = indexSelect ? indexSelect.options[indexSelect.selectedIndex].text : 'NDVI';
+
+    if (isNaN(lat) || isNaN(lon)) {
+        showToast('Lütfen geçerli koordinat girin veya haritaya tıklayın', 'warning');
+        return;
+    }
+
+    if (!state.hasDownloadedData) {
+        showToast('Önce Sentinel-2 verisi indirin', 'warning');
+        return;
+    }
+
+    showLoading(`${indexName} nokta değeri hesaplanıyor...`);
+    setStatus('Hesaplanıyor...');
+
+    try {
+        const response = await fetch('/api/stats/point', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                lat: lat,
+                lon: lon,
+                index_type: indexType,
+                window_size: 5
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            // Sonucu göster
+            const pointValue = data.point_value?.toFixed(4) || '-';
+            showToast(`${indexName}: ${pointValue} (${data.interpretation || ''})`, 'success');
+            setStatus(`${indexType.toUpperCase()}: ${pointValue}`);
+
+            // Result panel'i güncelle
+            const resultPanel = document.getElementById('panel-result');
+            const pointResult = document.getElementById('point-result');
+            const pointResultLabel = document.getElementById('point-result-label');
+            const resultInterpretation = document.getElementById('result-interpretation');
+
+            if (resultPanel) resultPanel.style.display = 'block';
+            if (pointResult) {
+                const valueSpan = pointResult.querySelector('.value');
+                if (valueSpan) valueSpan.textContent = pointValue;
+            }
+            if (pointResultLabel) pointResultLabel.textContent = `${indexName} Nokta Değeri`;
+            if (resultInterpretation) resultInterpretation.textContent = data.interpretation || '';
+        } else {
+            showToast(data.detail || 'Hesaplama hatası', 'error');
+            setStatus('Hata');
+        }
+    } catch (err) {
+        console.error('Point query error:', err);
+        showToast('Bağlantı hatası', 'error');
+        setStatus('Hata');
+    } finally {
+        hideLoading();
+    }
+}
+
+// İndeks tipi değiştiğinde çağrılır - cache'den göster veya paneli temizle
+function onIndexTypeChange() {
+    const indexSelect = document.getElementById('index-select');
+    const indexType = indexSelect ? indexSelect.value : 'ndvi';
+
+    // Cache'de bu indeks için veri var mı?
+    if (state.statsCache[indexType]) {
+        console.log(`[STATS] Loading cached stats for ${indexType}`);
+        displayZonalStats(state.statsCache[indexType]);
+        showToast(`${indexType.toUpperCase()} istatistikleri cache'den yüklendi`, 'info');
+    } else {
+        // Cache'de yok, paneli temizle
+        clearStatsPanel();
+        console.log(`[STATS] No cached stats for ${indexType}`);
+    }
+}
+
+// İstatistik panelini temizle
+function clearStatsPanel() {
+    const statMin = document.getElementById('stat-min');
+    const statMax = document.getElementById('stat-max');
+    const statMean = document.getElementById('stat-mean');
+    const statStd = document.getElementById('stat-std');
+
+    if (statMin) statMin.textContent = '-';
+    if (statMax) statMax.textContent = '-';
+    if (statMean) statMean.textContent = '-';
+    if (statStd) statStd.textContent = '-';
+
+    // Histogram'ı temizle
+    const canvas = document.getElementById('histogram-canvas');
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#0d1210';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // Sınıflandırma listesini temizle
+    const classList = document.getElementById('class-list');
+    if (classList) classList.innerHTML = '';
+
+    // Export butonlarını gizle (panel görünür kalsın ama değerler boş)
+    const exportButtons = document.getElementById('export-buttons');
+    if (exportButtons) exportButtons.style.display = 'none';
 }
 
 function displayZonalStats(data) {
@@ -1495,14 +1750,27 @@ async function createIndexMap() {
     const indexType = indexSelect ? indexSelect.value : 'ndvi';
     const indexName = indexSelect ? indexSelect.options[indexSelect.selectedIndex].text : 'NDVI';
 
+    // AOI kontrolü
+    if (!state.aoiGeometry) {
+        showToast('Önce haritada bir alan çizin', 'warning');
+        return;
+    }
+
     showLoading(`${indexName} haritası oluşturuluyor...`);
     setStatus(`${indexType.toUpperCase()} haritası hazırlanıyor`);
 
     try {
+        // API'ye AOI geometry'yi de gönder
+        const requestBody = {
+            index_type: indexType,
+            aoi_geojson: state.aoiGeometry  // Çizilen alan geometrisi
+        };
+        console.log('[MAP] Sending request with AOI:', state.aoiGeometry.type);
+
         const response = await fetch('/api/raster/create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ index_type: indexType })
+            body: JSON.stringify(requestBody)
         });
 
         const data = await response.json();
@@ -1510,7 +1778,8 @@ async function createIndexMap() {
         if (response.ok && data.success) {
             // Haritaya ekle
             addIndexLayerToMap(data, indexType, indexName);
-            showToast(`${indexName} haritası oluşturuldu`, 'success');
+            const clipMsg = data.clipped ? ' (AOI\'ye kırpıldı)' : '';
+            showToast(`${indexName} haritası oluşturuldu${clipMsg}`, 'success');
             setStatus('Hazır');
         } else {
             showToast(data.detail || 'Harita oluşturma hatası', 'error');
@@ -1743,3 +2012,330 @@ function displayClassification(classification) {
         classList.appendChild(classItem);
     });
 }
+
+// ============================================
+// Sidebar Toggle Functions
+// ============================================
+function initSidebarToggle() {
+    const sidebar = document.getElementById('sidebar');
+    const toggleBtn = document.getElementById('sidebar-toggle');
+    const openBtn = document.getElementById('sidebar-open');
+
+    if (toggleBtn && sidebar) {
+        toggleBtn.addEventListener('click', () => {
+            const isCollapsed = sidebar.getAttribute('data-collapsed') === 'true';
+            sidebar.setAttribute('data-collapsed', !isCollapsed);
+            updatePanelOpenButtons();
+        });
+    }
+
+    if (openBtn && sidebar) {
+        openBtn.addEventListener('click', () => {
+            sidebar.setAttribute('data-collapsed', 'false');
+            updatePanelOpenButtons();
+        });
+    }
+}
+
+function updatePanelOpenButtons() {
+    const sidebar = document.getElementById('sidebar');
+    const chatPanel = document.getElementById('ai-chat-panel');
+    const sidebarOpen = document.getElementById('sidebar-open');
+    const chatOpen = document.getElementById('chat-open');
+
+    if (sidebarOpen) {
+        sidebarOpen.style.display = sidebar?.getAttribute('data-collapsed') === 'true' ? 'flex' : 'none';
+    }
+    if (chatOpen) {
+        chatOpen.style.display = chatPanel?.getAttribute('data-collapsed') === 'true' ? 'flex' : 'none';
+    }
+
+    // Haritayı yeniden boyutlandır (panel değişikliklerinden sonra)
+    setTimeout(() => {
+        try {
+            // Map element'ini bul ve Leaflet instance'ını al
+            const mapEl = document.getElementById('map');
+            if (mapEl && mapEl._leaflet_map) {
+                mapEl._leaflet_map.invalidateSize();
+            }
+        } catch (e) {
+            console.log('[CHAT] Map resize skipped:', e.message);
+        }
+    }, 350); // CSS transition süresinden sonra
+}
+
+// ============================================
+// AI Chat Panel Functions
+// ============================================
+function initAIChat() {
+    const chatToggle = document.getElementById('chat-toggle');
+    const chatPanel = document.getElementById('ai-chat-panel');
+    const chatOpenBtn = document.getElementById('chat-open');
+    const sendBtn = document.getElementById('send-message');
+    const chatInput = document.getElementById('chat-input');
+    const saveApiKeyBtn = document.getElementById('save-api-key');
+    const apiKeyInput = document.getElementById('gemini-api-key');
+    const providerSelect = document.getElementById('ai-provider');
+
+    // Chat panel toggle
+    if (chatToggle && chatPanel) {
+        chatToggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const isCollapsed = chatPanel.getAttribute('data-collapsed') === 'true';
+            chatPanel.setAttribute('data-collapsed', isCollapsed ? 'false' : 'true');
+            console.log('[CHAT] Panel toggled:', !isCollapsed);
+            updatePanelOpenButtons();
+        });
+    } else {
+        console.error('[CHAT] Toggle button or panel not found!', { chatToggle, chatPanel });
+    }
+
+    // Chat panel open button (when collapsed)
+    if (chatOpenBtn && chatPanel) {
+        chatOpenBtn.addEventListener('click', () => {
+            chatPanel.setAttribute('data-collapsed', 'false');
+            updatePanelOpenButtons();
+        });
+    }
+
+    // Settings toggle (collapsible)
+    const settingsToggle = document.getElementById('settings-toggle');
+    const settingsWrapper = document.querySelector('.chat-settings-wrapper');
+    if (settingsToggle && settingsWrapper) {
+        settingsToggle.addEventListener('click', () => {
+            settingsWrapper.classList.toggle('expanded');
+        });
+    }
+
+    // Send message on button click
+    if (sendBtn) {
+        sendBtn.addEventListener('click', sendChatMessage);
+    }
+
+    // Send message on Enter (but Shift+Enter for new line) + Auto-resize textarea
+    if (chatInput) {
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendChatMessage();
+            }
+        });
+
+        // Character counter
+        const charCount = document.getElementById('char-count');
+        chatInput.addEventListener('input', () => {
+            if (charCount) {
+                charCount.textContent = chatInput.value.length;
+            }
+            // Auto-resize
+            chatInput.style.height = 'auto';
+            chatInput.style.height = Math.min(chatInput.scrollHeight, 100) + 'px';
+        });
+    }
+
+    // Save API key
+    if (saveApiKeyBtn && apiKeyInput) {
+        // Load saved key
+        if (state.geminiApiKey) {
+            apiKeyInput.value = state.geminiApiKey;
+        }
+
+        saveApiKeyBtn.addEventListener('click', () => {
+            const key = apiKeyInput.value.trim();
+            if (key) {
+                state.geminiApiKey = key;
+                localStorage.setItem('gemini_api_key', key);
+                showToast('API key kaydedildi', 'success');
+            }
+        });
+    }
+
+    // Provider change - hide/show API key field
+    if (providerSelect) {
+        const apiKeyGroup = document.getElementById('api-key-group');
+
+        // Initial state - hide if Ollama
+        if (providerSelect.value === 'ollama' && apiKeyGroup) {
+            apiKeyGroup.style.display = 'none';
+        }
+
+        providerSelect.addEventListener('change', (e) => {
+            state.aiProvider = e.target.value;
+            // Hide API key for Ollama, show for Gemini
+            if (apiKeyGroup) {
+                apiKeyGroup.style.display = e.target.value === 'ollama' ? 'none' : 'block';
+            }
+        });
+    }
+}
+
+async function sendChatMessage() {
+    const chatInput = document.getElementById('chat-input');
+    const message = chatInput?.value.trim();
+
+    if (!message || state.isChatLoading) return;
+
+    // Check API key for Gemini
+    if (state.aiProvider === 'gemini' && !state.geminiApiKey) {
+        showToast('Lütfen Gemini API key girin', 'warning');
+        return;
+    }
+
+    // Add user message to UI
+    addChatMessage('user', message);
+    chatInput.value = '';
+
+    // Build context from terrain data
+    const includeContext = document.getElementById('include-context')?.checked;
+    const context = includeContext ? buildTerrainContext() : null;
+
+    // Show loading
+    state.isChatLoading = true;
+    const loadingMsg = addChatMessage('ai', 'Düşünüyorum...', true);
+
+    try {
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: message,
+                provider: state.aiProvider,
+                api_key: state.geminiApiKey,
+                context: context,
+                history: state.chatMessages.slice(-10) // Son 10 mesaj
+            })
+        });
+
+        const data = await response.json();
+
+        // Remove loading message
+        loadingMsg.remove();
+
+        if (response.ok && data.success) {
+            addChatMessage('ai', data.response);
+        } else {
+            addChatMessage('ai', `Hata: ${data.detail || 'Bir şeyler yanlış gitti'}`);
+        }
+    } catch (err) {
+        loadingMsg.remove();
+        addChatMessage('ai', 'Bağlantı hatası. Lütfen tekrar deneyin.');
+        console.error('Chat error:', err);
+    } finally {
+        state.isChatLoading = false;
+    }
+}
+
+function addChatMessage(role, content, isLoading = false) {
+    const messagesContainer = document.getElementById('chat-messages');
+    if (!messagesContainer) return null;
+
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `chat-message ${role}${isLoading ? ' loading' : ''}`;
+
+    // Premium message structure with avatar
+    const avatarSvg = role === 'ai'
+        ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18">
+             <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/>
+           </svg>`
+        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18">
+             <path d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
+           </svg>`;
+
+    messageDiv.innerHTML = `
+        <div class="message-avatar">${avatarSvg}</div>
+        <div class="message-bubble">${isLoading ? '' : escapeHtml(content)}</div>
+    `;
+
+    messagesContainer.appendChild(messageDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    // Update status
+    updateChatStatus(isLoading ? 'Düşünüyor...' : 'Hazır');
+
+    // Save to state (except loading messages)
+    if (!isLoading) {
+        state.chatMessages.push({ role, content });
+    }
+
+    return messageDiv;
+}
+
+function updateChatStatus(text, isOnline = true) {
+    const statusText = document.querySelector('.status-text');
+    const statusDot = document.querySelector('.status-dot');
+    if (statusText) statusText.textContent = text;
+    if (statusDot) {
+        statusDot.style.background = isOnline ? 'var(--accent-primary)' : 'var(--text-muted)';
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML.replace(/\n/g, '<br>');
+}
+
+function buildTerrainContext() {
+    const indexSelect = document.getElementById('index-select');
+    const currentIndex = indexSelect?.value || 'ndvi';
+
+    let context = `=== AskTheEarth Arazi Verisi ===\n`;
+    context += `Aktif indeks: ${currentIndex.toUpperCase()}\n`;
+
+    // Mevcut indeksin istatistiklerini ekle
+    const cachedStats = state.statsCache[currentIndex];
+    if (cachedStats?.statistics) {
+        const stats = cachedStats.statistics;
+        context += `\n📊 ${currentIndex.toUpperCase()} İstatistikleri:\n`;
+        context += `  • Minimum: ${stats.min?.toFixed(4) || 'N/A'}\n`;
+        context += `  • Maksimum: ${stats.max?.toFixed(4) || 'N/A'}\n`;
+        context += `  • Ortalama: ${stats.mean?.toFixed(4) || 'N/A'}\n`;
+        context += `  • Medyan: ${stats.median?.toFixed(4) || 'N/A'}\n`;
+        context += `  • Standart Sapma: ${stats.std?.toFixed(4) || 'N/A'}\n`;
+    }
+
+    if (cachedStats?.classification) {
+        context += `\n🗺️ Arazi Sınıflandırması:\n`;
+        Object.entries(cachedStats.classification).forEach(([key, data]) => {
+            const bar = '█'.repeat(Math.round(data.percentage / 5));
+            context += `  • ${data.label}: ${data.percentage?.toFixed(1)}% ${bar}\n`;
+        });
+    }
+
+    // Diğer hesaplanmış indeksleri de ekle
+    const otherIndices = Object.keys(state.statsCache).filter(k => k !== currentIndex);
+    if (otherIndices.length > 0) {
+        context += `\n📈 Diğer hesaplanmış indeksler:\n`;
+        otherIndices.forEach(idx => {
+            const otherStats = state.statsCache[idx]?.statistics;
+            if (otherStats) {
+                context += `  • ${idx.toUpperCase()}: Ort=${otherStats.mean?.toFixed(3) || 'N/A'}, Min=${otherStats.min?.toFixed(3) || 'N/A'}, Max=${otherStats.max?.toFixed(3) || 'N/A'}\n`;
+            }
+        });
+    }
+
+    // Alan bilgisi
+    if (state.aoiGeometry) {
+        context += `\n📍 Seçili alan mevcut (kullanıcı haritada bir bölge belirlemiş)\n`;
+    }
+
+    if (state.drawnBounds) {
+        const bounds = state.drawnBounds;
+        context += `  Koordinatlar: ${bounds.getSouth().toFixed(4)}°N - ${bounds.getNorth().toFixed(4)}°N, ${bounds.getWest().toFixed(4)}°E - ${bounds.getEast().toFixed(4)}°E\n`;
+    }
+
+    // Eğer hiç veri yoksa uyar
+    if (!cachedStats && Object.keys(state.statsCache).length === 0) {
+        context += `\n⚠️ Henüz hesaplanmış indeks verisi yok. Kullanıcıya önce haritada alan seçip indeks hesaplamasını öner.\n`;
+    }
+
+    console.log('[CHAT] Context oluşturuldu:', context);
+    return context;
+}
+
+// Initialize sidebar and chat when page loads
+document.addEventListener('DOMContentLoaded', () => {
+    initSidebarToggle();
+    initAIChat();
+});

@@ -12,6 +12,7 @@ from app.service.calculate_ndvi import calculate_ndvi
 from app.service.raster_service import create_rgb_composite, create_ndvi_raster, create_index_raster, list_rasters
 from app.service.statistics import calculate_zonal_stats, get_point_stats
 from app.service.export_service import export_to_csv, export_stats_to_json, list_exports
+from app.service.ai_chat import chat_with_gemini, chat_with_ollama
 import uvicorn
 
 GEOJSON_PATH = "./geojson"
@@ -41,6 +42,7 @@ class SessionState:
     def __init__(self):
         self._band_folders: list[str] = []
         self._is_downloading: bool = False
+        self._active_band_folder: Optional[str] = None  # Aktif raster için kullanılan tile
 
     def add_band_folder(self, folder: str):
         if folder not in self._band_folders:
@@ -57,9 +59,19 @@ class SessionState:
         if self._band_folders:
             return self._band_folders[-1]
         return None
+    
+    def set_active_band_folder(self, folder: str):
+        """Aktif raster için kullanılan tile'ı ayarla"""
+        self._active_band_folder = folder
+        print(f"[STATE] Active band folder set: {folder}")
+    
+    def get_active_band_folder(self) -> Optional[str]:
+        """Aktif raster için kullanılan tile'ı döndür"""
+        return self._active_band_folder
 
     def clear(self):
         self._band_folders = []
+        self._active_band_folder = None
 
     def set_downloading(self, status: bool):
         self._is_downloading = status
@@ -119,6 +131,7 @@ def cancel_operations():
 class ZonalStatsRequest(BaseModel):
     index_type: str = "ndvi"
     band_folder: Optional[str] = None
+    aoi_geojson: Optional[dict] = None  # AOI polygon geometry
 
 class PointStatsRequest(BaseModel):
     lat: float
@@ -134,19 +147,37 @@ def api_zonal_stats(req: ZonalStatsRequest):
     Zonal istatistikleri hesaplar.
     
     - **index_type**: İndeks tipi (ndvi, ndwi, evi, savi, nbr)
-    - **band_folder**: Band folder yolu (opsiyonel, belirtilmezse son indirilen kullanılır)
+    - **aoi_geojson**: Opsiyonel AOI polygon geometry - sağlanırsa sadece bu alan için hesaplanır
     """
-    band_folder = req.band_folder or state.get_latest_band_folder()
+    # Önce aktif tile'ı dene (raster oluştururken kaydedilen)
+    active_folder = state.get_active_band_folder()
     
-    if not band_folder:
-        raise HTTPException(status_code=400, detail="Band folder belirtilmeli veya önce veri indirilmeli")
+    if active_folder:
+        result = calculate_zonal_stats(active_folder, req.index_type, aoi_geojson=req.aoi_geojson)
+        if result.get("success"):
+            return result
     
-    result = calculate_zonal_stats(band_folder, req.index_type)
+    # Aktif tile yoksa tüm tile'ları dene
+    band_folders = state.get_band_folders()
     
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("message", "İstatistik hesaplama hatası"))
+    if not band_folders:
+        raise HTTPException(status_code=400, detail="Önce veri indirilmeli")
     
-    return result
+    # Tüm tile'lardan istatistikleri birleştir veya en büyüğünü seç
+    all_results = []
+    for band_folder in band_folders:
+        if band_folder == active_folder:
+            continue
+        result = calculate_zonal_stats(band_folder, req.index_type, aoi_geojson=req.aoi_geojson)
+        if result.get("success"):
+            all_results.append(result)
+    
+    if not all_results:
+        raise HTTPException(status_code=500, detail="Hiçbir tile için istatistik hesaplanamadı")
+    
+    # En fazla piksel içeren sonucu döndür (en büyük alan kapsayan tile)
+    best_result = max(all_results, key=lambda r: r.get("pixel_count", 0))
+    return best_result
 
 
 @app.post("/api/stats/point")
@@ -159,17 +190,39 @@ def api_point_stats(req: PointStatsRequest):
     - **index_type**: İndeks tipi
     - **window_size**: Pencere boyutu (piksel)
     """
-    band_folder = req.band_folder or state.get_latest_band_folder()
+    # Önce aktif tile'ı dene (raster oluştururken kaydedilen)
+    active_folder = state.get_active_band_folder()
+    if active_folder:
+        result = get_point_stats(active_folder, req.lat, req.lon, req.index_type, req.window_size)
+        if result.get("success"):
+            return result
+        print(f"[API] Active tile failed: {result.get('message')}")
     
-    if not band_folder:
-        raise HTTPException(status_code=400, detail="Band folder belirtilmeli veya önce veri indirilmeli")
+    # Aktif tile'da bulunamazsa tüm tile'ları dene
+    band_folders = state.get_band_folders()
     
-    result = get_point_stats(band_folder, req.lat, req.lon, req.index_type, req.window_size)
+    if not band_folders:
+        raise HTTPException(status_code=400, detail="Önce veri indirilmeli")
     
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("message", "Nokta istatistik hatası"))
+    # Tüm tile'ları dene - birinde başarılı olursa döndür
+    last_error = None
+    for band_folder in band_folders:
+        if band_folder == active_folder:
+            continue  # Aktif tile zaten denendi
+        result = get_point_stats(band_folder, req.lat, req.lon, req.index_type, req.window_size)
+        
+        if result.get("success"):
+            return result
+        
+        # Bu tile'da başarısız olduysa, hatayı sakla ve devam et
+        last_error = result.get("message", "Nokta istatistik hatası")
+        print(f"[API] Point query failed for {band_folder}: {last_error}")
     
-    return result
+    # Hiçbir tile'da bulunamadı
+    raise HTTPException(
+        status_code=400, 
+        detail=f"Koordinat ({req.lat:.4f}, {req.lon:.4f}) indirilen hiçbir tile içinde değil. Lütfen yeşil raster alanı içinden bir nokta seçin."
+    )
 
 
 @app.get("/api/stats/available-indices")
@@ -233,6 +286,7 @@ def api_list_exports():
 
 class CreateRasterRequest(BaseModel):
     index_type: str = "ndvi"
+    aoi_geojson: Optional[dict] = None  # GeoJSON geometry (Polygon veya MultiPolygon)
 
 
 @app.post("/api/raster/create")
@@ -241,16 +295,21 @@ def api_create_index_raster(req: CreateRasterRequest):
     Belirtilen indeks tipine göre harita katmanı oluşturur.
     
     - **index_type**: ndvi, ndwi, evi, savi, nbr
+    - **aoi_geojson**: Opsiyonel GeoJSON geometry (Polygon). Belirtilirse raster bu alana clip edilir.
     """
     band_folder = state.get_latest_band_folder()
     
     if not band_folder:
         raise HTTPException(status_code=400, detail="Önce veri indirin")
     
-    result = create_index_raster(band_folder, req.index_type)
+    # AOI varsa create_index_raster'a geç
+    result = create_index_raster(band_folder, req.index_type, aoi_geojson=req.aoi_geojson)
     
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("message"))
+    
+    # Başarılı olursa, bu tile'ı aktif tile olarak kaydet (nokta sorgusu için)
+    state.set_active_band_folder(band_folder)
     
     return result
 
@@ -596,6 +655,57 @@ def create_all_rasters():
         "success": True,
         "message": f"NDVI: {len(results['ndvi'])} raster oluşturuldu",
         "rasters": results
+    }
+
+
+# ============================================
+# AI Chat Endpoint
+# ============================================
+
+class ChatRequest(BaseModel):
+    message: str
+    provider: str = "gemini"  # "gemini" or "ollama"
+    api_key: Optional[str] = None
+    context: Optional[str] = None
+    history: Optional[list] = None
+
+
+@app.post("/api/chat")
+async def api_chat(req: ChatRequest):
+    """
+    AI chat endpoint
+    
+    - **message**: Kullanıcı mesajı
+    - **provider**: AI provider (gemini veya ollama)
+    - **api_key**: Gemini API key (provider=gemini ise gerekli)
+    - **context**: Arazi verileri bağlamı
+    - **history**: Önceki mesajlar
+    """
+    if req.provider == "gemini":
+        if not req.api_key:
+            raise HTTPException(status_code=400, detail="Gemini için API key gerekli")
+        
+        result = await chat_with_gemini(
+            api_key=req.api_key,
+            message=req.message,
+            context=req.context,
+            history=req.history
+        )
+    elif req.provider == "ollama":
+        result = await chat_with_ollama(
+            message=req.message,
+            context=req.context,
+            history=req.history
+        )
+    else:
+        raise HTTPException(status_code=400, detail=f"Bilinmeyen provider: {req.provider}")
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "AI hatası"))
+    
+    return {
+        "success": True,
+        "response": result.get("response")
     }
 
 
